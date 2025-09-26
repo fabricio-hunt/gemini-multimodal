@@ -53,81 +53,34 @@
   </div>
 
   <!-- Script principal -->
-  <script defer src="script.js"></script>
+  <script> 
+  const URL = "ws://localhost:9090";
+      const video = document.getElementById("videoElement");
+      const canvas = document.getElementById("canvasElement");
+      let context;
+      // Variáveis de estado
+      let stream = null;
+      let currentFrameB64;
+      let webSocket = null;
+      let audioContext = null;
+      let processor = null;
+      let pcmData = [];
+      let interval = null;
+      let initialized = false;
+      let audioInputContext;
+      let workletNode;
+      let recording = false;
 
-  <!-- Código JS direto na página (pode ser movido para script.js) -->
-  <script>
-    // URL do servidor WebSocket
-    const URL = "ws://localhost:9090";
+      // O que fazer quando a página carregar
+      window.addEventListener("load", async () => {
+        context = canvas.getContext("2d");
+        setInterval(captureImage, 3000);
+        await startScreenShare();
+        await initializeAudioContext();
+        connect();
+      });
 
-    // Referências aos elementos de vídeo e canvas
-    const video = document.getElementById("videoElement");
-    const canvas = document.getElementById("canvasElement");
-
-    // Contexto do canvas (para desenhar as imagens capturadas)
-    let context;
-
-    // Variáveis de estado
-    let stream = null;
-    let currentFrameB64;
-    let webSocket = null;
-    let audioContext = null;
-    let processor = null;
-    let pcmData = [];
-    let interval = null;
-    let initialized = false;
-    let audioInputContext;
-    let workletNode;
-    let recording = false;
-
-    /**
-     * Classe que representa a resposta recebida do servidor.
-     * Pode conter texto e/ou dados de áudio.
-     */
-    class Response {
-      constructor(data) {
-        this.text = data.text || null;
-        this.audioData = data.audio || null;
-      }
-    }
-
-    /**
-     * Captura a tela do usuário (screen share) e envia para o vídeo.
-     */
-    async function startScreenShare() {
-      try {
-        stream = await navigator.mediaDevices.getDisplayMedia({
-          video: {
-            width: { max: 640 },
-            height: { max: 480 },
-          },
-        });
-
-        video.srcObject = stream;
-        await new Promise(resolve => {
-          video.onloadedmetadata = () => resolve();
-        });
-      } catch (err) {
-        console.error("Erro ao acessar a tela: ", err);
-      }
-    }
-
-    /**
-     * Quando a página terminar de carregar:
-     * - Prepara o contexto do canvas
-     * - Inicia a captura da tela
-     * - Inicializa o áudio
-     * - Conecta ao WebSocket
-     */
-    window.addEventListener("load", async () => {
-      context = canvas.getContext("2d");
-      setInterval(captureImage, 3000); // chama captureImage a cada 3s
-      await startScreenShare();
-      await initializeAudioContext();
-      connect();
-    });
-
-    class Response {
+      class Response {
         constructor(data) {
           this.text = data.text || null;
           this.audioData = data.audio || null;
@@ -150,14 +103,184 @@
         }
       }
 
-        function captureImage() {
+      function captureImage() {
         if (stream && video.videoWidth > 0) {
           context.drawImage(video, 0, 0, 640, 480);
           const imageData = canvas.toDataURL("image/jpeg").split(",")[1].trim();
           currentFrameB64 = imageData;
+          console.log(
+            "📸 IMAGEM CAPTURADA - Tamanho:",
+            imageData.length,
+            "bytes"
+          ); 
         }
       }
 
+      async function startAudioInput() {
+        audioContext = new AudioContext({ sampleRate: 16000 });
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: { channelCount: 1, sampleRate: 16000 },
+        });
+        console.log("🎙️ STREAM DE ÁUDIO INICIADO - Sample Rate: 16000Hz");
+        const source = audioContext.createMediaStreamSource(stream);
+        processor = audioContext.createScriptProcessor(4096, 1, 1);
+        processor.onaudioprocess = (e) => {
+          const inputData = e.inputBuffer.getChannelData(0);
+          const pcm16 = new Int16Array(inputData.length);
+          for (let i = 0; i < inputData.length; i++) {
+            pcm16[i] = inputData[i] * 0x7fff;
+          }
+          pcmData.push(...pcm16);
+        };
+        source.connect(processor);
+        processor.connect(audioContext.destination);
+        interval = setInterval(recordChunk, 3000);
+      }
+
+      function stopAudioInput() {
+        if (processor) {
+          processor.disconnect();
+        }
+        if (audioContext) {
+          audioContext.close();
+        }
+        clearInterval(interval);
+      }
+
+      function recordChunk() {
+        const buffer = new ArrayBuffer(pcmData.length * 2);
+        const view = new DataView(buffer);
+        pcmData.forEach((value, index) => {
+          view.setInt16(index * 2, value, true);
+        });
+        const base64 = btoa(
+          String.fromCharCode.apply(null, new Uint8Array(buffer))
+        );
+        console.log(
+          "🎤 ÁUDIO CAPTURADO - Tamanho:",
+          pcmData.length,
+          "amostras, Base64:",
+          base64.length,
+          "chars"
+        );
+        sendVoiceMessage(base64);
+        pcmData = [];
+      }
+
+      function sendVoiceMessage(b64PCM) {
+        if (webSocket == null) {
+          return;
+        }
+        const payload = {
+          realtime_input: {
+            media_chunks: [
+              { mime_type: "audio/pcm", data: b64PCM },
+              { mime_type: "image/jpeg", data: currentFrameB64 },
+            ],
+          },
+        };
+        webSocket.send(JSON.stringify(payload));
+      }
+
+      function connect() {
+        webSocket = new WebSocket(URL);
+        webSocket.onopen = () => {
+          sendInitialSetupMessage();
+        };
+        webSocket.onmessage = receiveMessage;
+        webSocket.onclose = () => {
+          console.log("Connection closed");
+        };
+        webSocket.onerror = (err) => {
+          console.error("WebSocket error:", err);
+        };
+      }
+
+      function sendInitialSetupMessage() {
+        const setupMessage = {
+          setup: { generation_config: { response_modalities: ["AUDIO"] } },
+        };
+        webSocket.send(JSON.stringify(setupMessage));
+      }
+
+      function receiveMessage(event) {
+        const messageData = JSON.parse(event.data);
+        const response = new Response(messageData);
+        if (response.text) {
+          displayMessage("GEMINI: " + response.text);
+        }
+        if (response.audioData) {
+          injestAudioChuckToPlay(response.audioData);
+        }
+      }
+
+      async function initializeAudioContext() {
+        if (initialized) return;
+        audioInputContext = new (window.AudioContext ||
+          window.webkitAudioContext)({
+          sampleRate: 24000,
+        });
+        await audioInputContext.audioWorklet.addModule("pcm-processor.js");
+        workletNode = new AudioWorkletNode(audioInputContext, "pcm-processor");
+        workletNode.connect(audioInputContext.destination);
+        initialized = true;
+      }
+
+      async function injestAudioChuckToPlay(base64AudioChunk) {
+        try {
+          if (audioInputContext.state === "suspended") {
+            await audioInputContext.resume();
+          }
+          const arrayBuffer = base64ToArrayBuffer(base64AudioChunk);
+          const float32Data = convertPCM16LEToFloat32(arrayBuffer);
+          workletNode.port.postMessage(float32Data);
+        } catch (error) {
+          console.error("Error processing audio chunk:", error);
+        }
+      }
+
+      function base64ToArrayBuffer(base64) {
+        const binaryString = window.atob(base64);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+        return bytes.buffer;
+      }
+
+      function convertPCM16LEToFloat32(pcmData) {
+        const inputArray = new Int16Array(pcmData);
+        const float32Array = new Float32Array(inputArray.length);
+        for (let i = 0; i < inputArray.length; i++) {
+          float32Array[i] = inputArray[i] / 32768;
+        }
+        return float32Array;
+      }
+
+      const toggleButton = document.getElementById("toggleButton");
+      toggleButton.addEventListener("click", () => {
+        if (recording) {
+          stopAudioInput();
+          recording = false;
+          toggleButton.innerHTML = '<i class="material-icons">mic_off</i>';
+        } else {
+          startAudioInput();
+          recording = true;
+          toggleButton.innerHTML = '<i class="material-icons">mic</i>';
+        }
+      });
+
+      function displayMessage(message) {
+        console.log(message);
+        addParagraphToDiv("chatLog", message);
+      }
+
+      function addParagraphToDiv(divId, text) {
+        const newParagraph = document.createElement("p");
+        newParagraph.textContent = text;
+        const div = document.getElementById(divId);
+        div.appendChild(newParagraph);
+      }
   </script>
 </body>
 </html>
