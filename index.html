@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Projeto Gemini</title>
+
+  <!-- Ícones do Material Design -->
+  <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons">
+
+  <!-- CSS externo do projeto -->
+  <link rel="stylesheet" href="style.css">
+
+  <!-- Material Design Lite (estilo e componentes) -->
+  <link rel="stylesheet" href="https://code.getmdl.io/1.3.0/material.indigo-pink.min.css">
+  <script defer src="https://code.getmdl.io/1.3.0/material.min.js"></script>
+</head>
+
+<body>
+  <!-- Layout principal com cabeçalho fixo -->
+  <div class="mdl-layout mdl-js-layout mdl-layout--fixed-header">
+
+    <!-- Cabeçalho -->
+    <header class="mdl-layout__header">
+      <div class="mdl-layout__header-row">
+        <span class="mdl-layout-title">Gemini Live Demo</span>
+      </div>
+    </header>
+
+    <!-- Conteúdo principal -->
+    <main class="mdl-layout__content">
+      <div class="page-content">
+        <div class="demo-content">
+
+          <!-- Botão para iniciar/pausar captura de áudio/vídeo -->
+          <div class="button-group">
+            <button id="toggleButton"
+                    class="mdl-button mdl-js-button mdl-button--fab mdl-button--mini-fab mdl-button--colored">
+              <i class="material-icons">mic</i>
+            </button>
+          </div>
+
+          <!-- Elementos de vídeo e canvas ocultos -->
+          <video id="videoElement" autoplay style="display: none;"></video>
+          <canvas id="canvasElement" style="display: none;"></canvas>
+
+          <!-- Log de mensagens ou chat -->
+          <div id="chatLog"></div>
+
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Script principal -->
+  <script defer src="script.js"></script>
+
+  <!-- Código JS direto na página (pode ser movido para script.js) -->
+  <script>
+    // URL do servidor WebSocket
+    const URL = "ws://localhost:9090";
+
+    // Referências aos elementos de vídeo e canvas
+    const video = document.getElementById("videoElement");
+    const canvas = document.getElementById("canvasElement");
+
+    // Contexto do canvas (para desenhar as imagens capturadas)
+    let context;
+
+    // Variáveis de estado
+    let stream = null;
+    let currentFrameB64;
+    let webSocket = null;
+    let audioContext = null;
+    let processor = null;
+    let pcmData = [];
+    let interval = null;
+    let initialized = false;
+    let audioInputContext;
+    let workletNode;
+    let recording = false;
+
+    /**
+     * Classe que representa a resposta recebida do servidor.
+     * Pode conter texto e/ou dados de áudio.
+     */
+    class Response {
+      constructor(data) {
+        this.text = data.text || null;
+        this.audioData = data.audio || null;
+      }
+    }
+
+    /**
+     * Captura a tela do usuário (screen share) e envia para o vídeo.
+     */
+    async function startScreenShare() {
+      try {
+        stream = await navigator.mediaDevices.getDisplayMedia({
+          video: {
+            width: { max: 640 },
+            height: { max: 480 },
+          },
+        });
+
+        video.srcObject = stream;
+        await new Promise(resolve => {
+          video.onloadedmetadata = () => resolve();
+        });
+      } catch (err) {
+        console.error("Erro ao acessar a tela: ", err);
+      }
+    }
+
+    /**
+     * Quando a página terminar de carregar:
+     * - Prepara o contexto do canvas
+     * - Inicia a captura da tela
+     * - Inicializa o áudio
+     * - Conecta ao WebSocket
+     */
+    window.addEventListener("load", async () => {
+      context = canvas.getContext("2d");
+      setInterval(captureImage, 3000); // chama captureImage a cada 3s
+      await startScreenShare();
+      await initializeAudioContext();
+      connect();
+    });
+
+    class Response {
+        constructor(data) {
+          this.text = data.text || null;
+          this.audioData = data.audio || null;
+        }
+      }
+
+      async function startScreenShare() {
+        try {
+          stream = await navigator.mediaDevices.getDisplayMedia({
+            video: { width: { max: 640 }, height: { max: 480 } },
+          }); // Definir resolução máxima
+          video.srcObject = stream;
+          await new Promise((resolve) => {
+            video.onloadedmetadata = () => {
+              resolve();
+            };
+          });
+        } catch (err) {
+          console.error("Error accessing the screen: ", err);
+        }
+      }
+
+        function captureImage() {
+        if (stream && video.videoWidth > 0) {
+          context.drawImage(video, 0, 0, 640, 480);
+          const imageData = canvas.toDataURL("image/jpeg").split(",")[1].trim();
+          currentFrameB64 = imageData;
+        }
+      }
+
+  </script>
+</body>
+</html>
